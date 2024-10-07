@@ -17,9 +17,20 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Environment validation
+SECRET_KEY = os.getenv('SECRET_KEY')
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY must be set in environment")
+
+# Configuration
+DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///noclip.db')
+PORT = int(os.getenv('PORT', '8000'))
+HOST = os.getenv('HOST', '0.0.0.0')
+DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
+
 # Database setup
 Base = declarative_base()
-engine = create_engine('sqlite:///noclip.db')
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 
 class User(Base):
@@ -40,10 +51,10 @@ class Clip(Base):
 
 Base.metadata.create_all(engine)
 
-# Server
-app = FastAPI()
+# FastAPI app
+app = FastAPI(title="NoClip", description="Clipboard sharing between machines")
 
-# API key authentication
+# Auth
 api_key_header = APIKeyHeader(name="X-API-Key")
 
 def get_db():
@@ -59,9 +70,11 @@ async def get_current_user(api_key: str = Depends(api_key_header), db: Session =
         raise HTTPException(status_code=401, detail="Invalid API key")
     return user
 
+# API Models
 class ClipContent(BaseModel):
     content: str
 
+# API Routes
 @app.put("/clip/{bucket}")
 async def put_clip(bucket: str, content: ClipContent, user = Depends(get_current_user), db: Session = Depends(get_db)):
     clip = db.query(Clip).filter(Clip.owner_id == user.id, Clip.bucket == bucket).first()
@@ -75,7 +88,6 @@ async def put_clip(bucket: str, content: ClipContent, user = Depends(get_current
 
 @app.get("/clip/{owner_id}/{bucket}")
 async def get_clip(owner_id: str, bucket: str, user = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Check if friendship exists
     friendship = db.query(Friendship).filter(
         ((Friendship.user_id == user.id) & (Friendship.friend_id == owner_id)) |
         ((Friendship.user_id == owner_id) & (Friendship.friend_id == user.id))
@@ -97,6 +109,14 @@ async def add_friend(friend_id: str, user = Depends(get_current_user), db: Sessi
     friend = db.query(User).filter(User.id == friend_id).first()
     if not friend:
         raise HTTPException(status_code=404, detail="User not found")
+    
+    existing_friendship = db.query(Friendship).filter(
+        ((Friendship.user_id == user.id) & (Friendship.friend_id == friend_id)) |
+        ((Friendship.user_id == friend_id) & (Friendship.friend_id == user.id))
+    ).first()
+    
+    if existing_friendship:
+        return {"status": "already friends"}
     
     friendship = Friendship(user_id=user.id, friend_id=friend_id)
     db.add(friendship)
@@ -124,16 +144,28 @@ def save_config(config):
         for key, value in config.items():
             f.write(f"{key}={value}\n")
 
+def get_server_url():
+    server_url = os.getenv('NOCLIP_SERVER')
+    if not server_url:
+        config = load_config()
+        server_url = config.get('server_url')
+        if not server_url:
+            raise click.UsageError(
+                "Server URL not set. Please set NOCLIP_SERVER environment variable "
+                "or add it to ~/.config/noclip/config"
+            )
+    return server_url
+
 # CLI
 @click.group()
 def cli():
-    """noclip - Share clipboards between machines"""
+    """NoClip - Share clipboards between machines"""
     pass
 
 @cli.command()
 @click.argument('user_id')
 def register(user_id: str):
-    """Register a new user"""
+    """Register as a new user"""
     api_key = secrets.token_urlsafe(32)
     
     try:
@@ -151,8 +183,8 @@ def register(user_id: str):
 
 @cli.command()
 @click.argument('friend_id')
-def add_friend(friend_id: str):
-    """Add a friend by their unique ID"""
+def add(friend_id: str):
+    """Add a friend by their ID"""
     config = load_config()
     if not config:
         click.echo("Please register first using 'noclip register <user_id>'", err=True)
@@ -160,7 +192,7 @@ def add_friend(friend_id: str):
     
     try:
         response = httpx.post(
-            f"{os.getenv('SERVER_URL', 'http://localhost:8000')}/users/add/{friend_id}",
+            f"{get_server_url()}/users/add/{friend_id}",
             headers={"X-API-Key": config["api_key"]}
         )
         response.raise_for_status()
@@ -180,7 +212,7 @@ def put(bucket: str, content: str):
     
     try:
         response = httpx.put(
-            f"{os.getenv('SERVER_URL', 'http://localhost:8000')}/clip/{bucket}",
+            f"{get_server_url()}/clip/{bucket}",
             json={"content": content},
             headers={"X-API-Key": config["api_key"]}
         )
@@ -191,7 +223,7 @@ def put(bucket: str, content: str):
 
 @cli.command()
 @click.argument('owner_id')
-@click.argument('bucket')
+@click.argument('bucket', default='default')
 def get(owner_id: str, bucket: str):
     """Get content from someone's bucket"""
     config = load_config()
@@ -201,7 +233,7 @@ def get(owner_id: str, bucket: str):
     
     try:
         response = httpx.get(
-            f"{os.getenv('SERVER_URL', 'http://localhost:8000')}/clip/{owner_id}/{bucket}",
+            f"{get_server_url()}/clip/{owner_id}/{bucket}",
             headers={"X-API-Key": config["api_key"]}
         )
         response.raise_for_status()
@@ -214,6 +246,6 @@ def get(owner_id: str, bucket: str):
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "serve":
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        uvicorn.run(app, host=HOST, port=PORT)
     else:
         cli()
