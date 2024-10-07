@@ -1,0 +1,9 @@
+# requirements.txt
+fastapi==0.109.2
+uvicorn==0.27.1
+click==8.1.7
+pyperclip==1.8.2
+httpx==0.26.0
+sqlalchemy==2.0.27
+python-dotenv==1.0.0
+secrets==1.0.2
