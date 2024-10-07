@@ -89,7 +89,7 @@ async def get_clip(owner_id: str, bucket: str, user = Depends(get_current_user),
         raise HTTPException(status_code=404, detail="Clip not found")
     return {"content": clip.content}
 
-@app.post("/users/add_friend/{friend_id}")
+@app.post("/users/add/{friend_id}")
 async def add_friend(friend_id: str, user = Depends(get_current_user), db: Session = Depends(get_db)):
     if friend_id == user.id:
         raise HTTPException(status_code=400, detail="Cannot add yourself as friend")
@@ -127,7 +127,7 @@ def save_config(config):
 # CLI
 @click.group()
 def cli():
-    """NoClip - Share clipboards between machines"""
+    """noclip - Share clipboards between machines"""
     pass
 
 @cli.command()
@@ -160,7 +160,7 @@ def add_friend(friend_id: str):
     
     try:
         response = httpx.post(
-            f"{os.getenv('SERVER_URL', 'http://localhost:8000')}/users/add_friend/{friend_id}",
+            f"{os.getenv('SERVER_URL', 'http://localhost:8000')}/users/add/{friend_id}",
             headers={"X-API-Key": config["api_key"]}
         )
         response.raise_for_status()
